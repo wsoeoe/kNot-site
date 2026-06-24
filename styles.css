@@ -179,6 +179,51 @@ code {
     overflow-y: auto;
 }
 
+.guide-section {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 20px;
+}
+
+.guide-step {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 14px;
+}
+
+.step-num {
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: #238636;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 14px;
+}
+
+.guide-step p {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.5;
+    color: #c9d1d9;
+}
+
+.guide-note {
+    margin-top: 16px;
+    padding: 12px;
+    background: #0d1117;
+    border-radius: 8px;
+    font-size: 13px;
+    color: #8b949e;
+}
+
 .footer {
     text-align: center;
     color: #484f58;
