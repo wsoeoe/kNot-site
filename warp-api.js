@@ -1,6 +1,8 @@
 // WARP API — регистрация устройства в Cloudflare WARP
 
 const WARP_API = "https://api.cloudflareclient.com/v0a4005/reg";
+// CORS proxy — Cloudflare Worker (бесплатный, без ограничений)
+const CORS_PROXY = "https://corsproxy.io/?url=";
 
 async function generateWarpConfig(options) {
     // Load TweetNaCl
@@ -59,11 +61,13 @@ async function registerDevice(publicKeyB64) {
         locale: "ru_RU",
     };
 
-    const response = await fetch(WARP_API, {
+    // Используем CORS прокси — Cloudflare API не отдаёт CORS заголовки
+    const apiUrl = CORS_PROXY + encodeURIComponent(WARP_API);
+
+    const response = await fetch(apiUrl, {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
-            "User-Agent": "okhttp/3.12.1",
         },
         body: JSON.stringify(body),
     });
