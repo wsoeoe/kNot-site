@@ -1,43 +1,26 @@
 // WARP API — регистрация устройства в Cloudflare WARP
-// Возвращает {config: WireGuardConf, privateKey, publicKey, endpoint}
 
 const WARP_API = "https://api.cloudflareclient.com/v0a4005/reg";
 
 async function generateWarpConfig(options) {
-    // 1. Generate WireGuard key pair
-    const keyPair = await generateWireGuardKeys();
+    // Load TweetNaCl
+    await loadNaCl();
+
+    // 1. Generate WireGuard key pair (X25519 / Curve25519)
+    const privKey = window.nacl.randomBytes(32);
+    const pubKey = window.nacl.scalarMult.base(privKey);
     
-    // 2. Register device with Cloudflare WARP API
-    const installToken = await getInstallToken();
-    const registration = await registerDevice(keyPair.publicKey, installToken);
+    const privateKeyB64 = bytesToBase64(privKey);
+    const publicKeyB64 = bytesToBase64(pubKey);
+
+    // 2. Register device with WARP API
+    const registration = await registerDevice(publicKeyB64);
     
     // 3. Build config
-    const config = buildConfig(keyPair, registration, options);
-    return config;
+    return buildConfig(privateKeyB64, registration, options);
 }
 
-async function generateWireGuardKeys() {
-    // Use Web Crypto API for X25519 key generation
-    // WireGuard uses Curve25519
-    const keyPair = await window.crypto.subtle.generateKey(
-        { name: "ECDH", namedCurve: "P-256" }, // Fallback - will use below
-        true, ["deriveKey", "deriveBits"]
-    );
-    
-    // Actually WireGuard uses Curve25519 (X25519)
-    // We need to generate it manually or use a library
-    // For now, use the WARP API which can generate keys for us
-    
-    // Alternative: generate random 32-byte key (WireGuard private key)
-    const privateKeyBytes = crypto.getRandomValues(new Uint8Array(32));
-    const privateKey = base64Encode(privateKeyBytes);
-    
-    // Public key = Curve25519(privateKey, basepoint)
-    // We'll use the WARP API to register and get the peer public key
-    return { privateKey };
-}
-
-function base64Encode(bytes) {
+function bytesToBase64(bytes) {
     let binary = '';
     for (let i = 0; i < bytes.length; i++) {
         binary += String.fromCharCode(bytes[i]);
@@ -45,7 +28,7 @@ function base64Encode(bytes) {
     return btoa(binary);
 }
 
-function base64Decode(str) {
+function base64ToBytes(str) {
     const binary = atob(str);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) {
@@ -54,16 +37,20 @@ function base64Decode(str) {
     return bytes;
 }
 
-async function getInstallToken() {
-    // WARP install token — public, same for all free users
-    return "7a45bfba-5e35-4c29-bd14-dfe26c76f7e5";
+async function loadNaCl() {
+    if (window.nacl) return;
+    return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = "https://cdn.jsdelivr.net/npm/tweetnacl@1.0.3/nacl.min.js";
+        script.onload = resolve;
+        script.onerror = () => reject(new Error("Failed to load TweetNaCl"));
+        document.head.appendChild(script);
+    });
 }
 
-async function registerDevice(privateKey, installToken) {
-    const publicKey = await derivePublicKey(privateKey);
-    
+async function registerDevice(publicKeyB64) {
     const body = {
-        key: publicKey,
+        key: publicKeyB64,
         install_id: "",
         fcm_token: "",
         tos: new Date().toISOString(),
@@ -82,36 +69,11 @@ async function registerDevice(privateKey, installToken) {
     });
 
     if (!response.ok) {
-        throw new Error(`WARP API error: ${response.status}`);
+        const text = await response.text();
+        throw new Error(`WARP API: ${response.status} ${text}`);
     }
 
-    const data = await response.json();
-    return data;
-}
-
-async function derivePublicKey(privateKey) {
-    // X25519 scalar multiplication with the base point
-    // UsingTweetNaCl or manual implementation
-    // For simplicity, we'll use a minimal Curve25519 implementation
-    
-    // Import nacl from CDN
-    if (!window.nacl) {
-        await loadNaCl();
-    }
-    
-    const privKeyBytes = base64Decode(privateKey);
-    const pubKeyBytes = window.nacl.scalarMult.base(privKeyBytes);
-    return base64Encode(pubKeyBytes);
-}
-
-async function loadNaCl() {
-    return new Promise((resolve, reject) => {
-        const script = document.createElement('script');
-        script.src = "https://cdn.jsdelivr.net/npm/tweetnacl@1.0.3/nacl.min.js";
-        script.onload = resolve;
-        script.onerror = reject;
-        document.head.appendChild(script);
-    });
+    return await response.json();
 }
 
 function generateSerial() {
@@ -123,7 +85,7 @@ function generateSerial() {
     return serial;
 }
 
-function buildConfig(keyPair, registration, options) {
+function buildConfig(privateKeyB64, registration, options) {
     const peerPublicKey = registration.config.peer_public_key;
     const endpoint = options.endpoint === "auto" 
         ? "engage.cloudflareclient.com:2408" 
@@ -131,13 +93,11 @@ function buildConfig(keyPair, registration, options) {
     
     const ipv4 = registration.config.interface.addresses.v4;
     const ipv6 = registration.config.interface.addresses.v6;
-    const dns = options.dns;
     
-    // AmneziaWG parameters (WARP free uses these fixed values)
     let config = `[Interface]
-PrivateKey = ${keyPair.privateKey}
+PrivateKey = ${privateKeyB64}
 Address = ${ipv4}, ${ipv6}
-DNS = ${dns}
+DNS = ${options.dns}
 MTU = 1380
 S1 = 0
 S2 = 0
@@ -156,7 +116,7 @@ PublicKey = ${peerPublicKey}
 AllowedIPs = 0.0.0.0/0, ::/0
 Endpoint = ${endpoint}`;
 
-    if (options.keepalive) {
+    if (options.keepalive > 0) {
         config += `\nPersistentKeepalive = ${options.keepalive}`;
     }
     
