@@ -1,107 +1,77 @@
-// WARP API — регистрация устройства в Cloudflare WARP
+// WARP API — получает конфиг с публичного WARP генератор API
+// Использует те же endpoints что и warp-generator.github.io
 
-const WARP_API = "https://api.cloudflareclient.com/v0a4005/reg";
-// CORS proxy — Cloudflare Worker (бесплатный, без ограничений)
-const CORS_PROXY = "https://corsproxy.io/?url=";
+const CONFIG_ENDPOINTS = [
+    "https://www.warp-generator.workers.dev",
+    "https://warp-gen.netlify.app/",
+    "https://warp.sub-aggregator.workers.dev",
+    "https://warp-vercel-chi.vercel.app/api/warp-data",
+    "https://warp-vercel-murex.vercel.app/api/warp-data",
+];
+
+const PORTS = [500, 854, 859, 864, 878, 880, 890, 891, 894, 903, 908, 928, 934, 939, 942, 943, 945, 946, 955, 968, 987, 988, 1002, 1010, 1014, 1018, 1070, 1074, 1180, 1387, 1701, 1843, 2371, 2408, 2506, 3138, 3476, 3581, 3854, 4177, 4198, 4233, 4500, 5279, 5956, 7103, 7152, 7156, 7281, 7559, 8319, 8742, 8854, 8886];
+
+const PREFIXES = [
+    "162.159.192.", "162.159.195.", "engage.cloudflareclient.com",
+    "8.6.112.", "8.34.70.", "8.34.146.", "8.35.211.", "8.39.125.",
+    "8.39.204.", "8.39.214.", "8.47.69.", "188.114.96.", "188.114.97.", "188.114.98."
+];
 
 async function generateWarpConfig(options) {
-    // Load TweetNaCl
-    await loadNaCl();
+    // Fetch config data from backend
+    const configData = await fetchFullConfig();
 
-    // 1. Generate WireGuard key pair (X25519 / Curve25519)
-    const privKey = window.nacl.randomBytes(32);
-    const pubKey = window.nacl.scalarMult.base(privKey);
-    
-    const privateKeyB64 = bytesToBase64(privKey);
-    const publicKeyB64 = bytesToBase64(pubKey);
+    // Generate random endpoint
+    const endpoint = generateRandomEndpoint(options.endpoint);
 
-    // 2. Register device with WARP API
-    const registration = await registerDevice(publicKeyB64);
-    
-    // 3. Build config
-    return buildConfig(privateKeyB64, registration, options);
+    // Build config
+    return buildConfig(configData, endpoint, options);
 }
 
-function bytesToBase64(bytes) {
-    let binary = '';
-    for (let i = 0; i < bytes.length; i++) {
-        binary += String.fromCharCode(bytes[i]);
+async function fetchFullConfig() {
+    let lastError;
+    for (let i = 0; i < CONFIG_ENDPOINTS.length; i++) {
+        try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 5000);
+            const response = await fetch(CONFIG_ENDPOINTS[i], { signal: controller.signal });
+            clearTimeout(timeout);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            return await response.json();
+        } catch (error) {
+            lastError = error;
+        }
     }
-    return btoa(binary);
+    throw new Error(`All endpoints failed: ${lastError?.message}`);
 }
 
-function base64ToBytes(str) {
-    const binary = atob(str);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i);
+function generateRandomEndpoint(option) {
+    if (option && option !== "auto") return option;
+    
+    const port = PORTS[Math.floor(Math.random() * PORTS.length)];
+    const prefix = PREFIXES[Math.floor(Math.random() * PREFIXES.length)];
+    
+    if (prefix === "engage.cloudflareclient.com") {
+        return `${prefix}:${port}`;
     }
-    return bytes;
+    const num = Math.floor(Math.random() * 10) + 1;
+    return `${prefix}${num}:${port}`;
 }
 
-async function loadNaCl() {
-    if (window.nacl) return;
-    return new Promise((resolve, reject) => {
-        const script = document.createElement('script');
-        script.src = "https://cdn.jsdelivr.net/npm/tweetnacl@1.0.3/nacl.min.js";
-        script.onload = resolve;
-        script.onerror = () => reject(new Error("Failed to load TweetNaCl"));
-        document.head.appendChild(script);
-    });
-}
+function buildConfig(configData, endpoint, options) {
+    let address = configData.client_ipv4;
+    let dns = options.dns;
 
-async function registerDevice(publicKeyB64) {
-    const body = {
-        key: publicKeyB64,
-        install_id: "",
-        fcm_token: "",
-        tos: new Date().toISOString(),
-        model: "PC",
-        serial_number: generateSerial(),
-        locale: "ru_RU",
-    };
-
-    // Используем CORS прокси — Cloudflare API не отдаёт CORS заголовки
-    const apiUrl = CORS_PROXY + encodeURIComponent(WARP_API);
-
-    const response = await fetch(apiUrl, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-        },
-        body: JSON.stringify(body),
-    });
-
-    if (!response.ok) {
-        const text = await response.text();
-        throw new Error(`WARP API: ${response.status} ${text}`);
+    if (options.ipv6) {
+        address = `${configData.client_ipv4}, ${configData.client_ipv6}`;
+    } else {
+        dns = dns.split(',').filter(ip => !ip.includes(':')).join(',');
     }
 
-    return await response.json();
-}
-
-function generateSerial() {
-    const chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    let serial = "";
-    for (let i = 0; i < 16; i++) {
-        serial += chars[Math.floor(Math.random() * chars.length)];
-    }
-    return serial;
-}
-
-function buildConfig(privateKeyB64, registration, options) {
-    const peerPublicKey = registration.config.peer_public_key;
-    const endpoint = options.endpoint === "auto" 
-        ? "engage.cloudflareclient.com:2408" 
-        : options.endpoint;
-    
-    const ipv4 = registration.config.interface.addresses.v4;
-    const ipv6 = registration.config.interface.addresses.v6;
-    
     let config = `[Interface]
-PrivateKey = ${privateKeyB64}
-Address = ${ipv4}, ${ipv6}
-DNS = ${options.dns}
+PrivateKey = ${configData.privKey}
+Address = ${address}
+DNS = ${dns}
 MTU = 1380
 S1 = 0
 S2 = 0
@@ -116,13 +86,13 @@ H3 = 3
 H4 = 4
 
 [Peer]
-PublicKey = ${peerPublicKey}
+PublicKey = ${configData.peer_pub}
 AllowedIPs = 0.0.0.0/0, ::/0
 Endpoint = ${endpoint}`;
 
     if (options.keepalive > 0) {
         config += `\nPersistentKeepalive = ${options.keepalive}`;
     }
-    
+
     return config;
 }
